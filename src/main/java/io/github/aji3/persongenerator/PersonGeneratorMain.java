@@ -1,6 +1,11 @@
 package io.github.aji3.persongenerator;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -8,9 +13,11 @@ import org.codehaus.groovy.control.CompilerConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xlbean.XlBean;
+import org.xlbean.definition.BeanDefinitionLoader;
 import org.xlbean.reader.XlBeanReader;
 import org.xlbean.util.FieldAccessHelper;
 import org.xlbean.util.XlBeanFactory;
+import org.xlbean.writer.XlBeanWriter;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -63,12 +70,23 @@ public class PersonGeneratorMain {
             log.info("End {}", i);
         }
 
+        XlBean output = new XlBean();
+        output.set("persons", list);
+        XlBeanWriter writer = new XlBeanWriter(new BeanDefinitionLoader(2));
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+        String outFileName = String.format("result_%s.xlsx", formatter.format(LocalDateTime.now()));
+        try (OutputStream outFile = new FileOutputStream(outFileName)) {
+            writer.write(output, null, output, outFile);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         ObjectMapper mapper = new ObjectMapper();
         try {
             log.info(mapper.writeValueAsString(list));
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
+        log.info("Result written out to {}", outFileName);
     }
 
     private void init() {
@@ -109,7 +127,7 @@ public class PersonGeneratorMain {
     private XlBean generateInternal(XlBean xlbean, XlBean me, LogicType logicType) {
         final XlBean targetObject = XlBeanFactory.getInstance().createBean();
 
-        xlbean.entrySet().stream().forEach(entry -> shell.setProperty(entry.getKey(), entry.getValue()));
+        xlbean.forEach((key, value) -> shell.setProperty(key, value));
         shell.setProperty("xlbean", xlbean);
         shell.setProperty("_this", targetObject);
         shell.setProperty("_me", me);

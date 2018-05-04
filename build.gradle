@@ -16,7 +16,7 @@ dependencies {
    compile 'org.slf4j:slf4j-api:1.7.25'
    compile group: 'ch.qos.logback', name: 'logback-classic', version:'1.2.2'
    compile group: 'ch.qos.logback', name: 'logback-core', version:'1.2.2'
-   compile group: 'org.xlbean', name: 'xlbean', version:'0.1.6'
+   compile group: 'org.xlbean', name: 'xlbean', version:'0.1.7.1'
    compile group: 'com.ibm.icu', name: 'icu4j', version: '61.1'
    compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.9.5'
    
