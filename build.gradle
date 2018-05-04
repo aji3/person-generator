@@ -1,0 +1,25 @@
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+[compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
+
+repositories {
+	mavenCentral()
+	jcenter()
+}
+
+dependencies {
+   compile group: 'com.mitchellbosecke', name: 'pebble', version:'2.3.0'
+   compile group: 'org.codehaus.groovy', name: 'groovy-jsr223', version:'2.4.10'
+   compile 'org.slf4j:slf4j-api:1.7.25'
+   compile group: 'ch.qos.logback', name: 'logback-classic', version:'1.2.2'
+   compile group: 'ch.qos.logback', name: 'logback-core', version:'1.2.2'
+   compile group: 'org.xlbean', name: 'xlbean', version:'0.1.6'
+   compile group: 'com.ibm.icu', name: 'icu4j', version: '61.1'
+   compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.9.5'
+   
+   testCompile group: 'junit', name: 'junit', version:'3.8.1'
+   
+}
