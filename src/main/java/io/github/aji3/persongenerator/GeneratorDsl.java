@@ -9,6 +9,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.xlbean.XlBean;
+import org.xlbean.util.FieldAccessHelper;
+
 import com.ibm.icu.text.Transliterator;
 
 import groovy.lang.Script;
@@ -88,7 +91,7 @@ public abstract class GeneratorDsl extends Script {
     public String generateEmailFrom(String... strings) {
         String email = String.join("_", strings) + "@" + ((Map) randomFrom((List) getProperty("emailDomains"))).get(
             "value");
-        Transliterator transliterator = Transliterator.getInstance("Katakana-Latin");
+        Transliterator transliterator = Transliterator.getInstance("Any-Latin");
         return transliterator.transliterate(email);
     }
 
@@ -100,6 +103,28 @@ public abstract class GeneratorDsl extends Script {
             return String.format("090-%04d-%04d", (int) (Math.random() * 10000), (int) (Math.random() * 10000));
         }
         return "";
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public Map<String, Object> generateAddress() {
+        Map<String, Object> address = (Map) randomFrom((List) getProperty("addresses"));
+        String address1 = String.format("%s-%s", randomIntBetween(1, 9), randomIntBetween(1, 30));
+        String address1Kanji = address1;
+        if (randomBoolean()) {
+            // mansion
+            Map<String, String> mansion = (Map) randomFrom((List) getProperty("mansions"));
+            String roomNumber = String.format(" %d", (int) (Math.random() * 1000) + 100);
+            address1 = address1 + " "
+                    + String.format(mansion.get("name"), address.get("town"))
+                    + roomNumber;
+            address1Kanji = address1Kanji + " "
+                    + String.format(mansion.get("nameKanji"), address.get("townKanji"))
+                    + roomNumber;
+        }
+        address.put("address1", address1);
+        address.put("address1Kanji", address1Kanji);
+
+        return address;
     }
 
     public Boolean randomBoolean() {
@@ -116,5 +141,9 @@ public abstract class GeneratorDsl extends Script {
             sb.append((int) (Math.random() * 10));
         }
         return sb.toString();
+    }
+
+    public void putSafe(String key, Object value, XlBean target) {
+        FieldAccessHelper.setValue(key, value, target);
     }
 }

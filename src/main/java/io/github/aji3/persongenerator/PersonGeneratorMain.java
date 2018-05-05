@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -19,7 +21,6 @@ import org.xlbean.util.FieldAccessHelper;
 import org.xlbean.util.XlBeanFactory;
 import org.xlbean.writer.XlBeanWriter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import groovy.lang.GroovyShell;
@@ -32,16 +33,17 @@ public class PersonGeneratorMain {
         new PersonGeneratorMain().run();
     }
 
+    private String excelFileName = "person_generator.xlsx";
     private GroovyShell shell;
+    private XlBean xlbean;
 
     public void run() {
 
+        String now = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now());
+
         init();
 
-        XlBean xlbean = new XlBeanReader().read(new File("person_generator.xlsx"));
-        System.out.println(xlbean);
-
-        List<XlBean> list = new ArrayList<>();
+        List<XlBean> resultList = new ArrayList<>();
 
         int numberToGenerate = 10;
         try {
@@ -53,40 +55,49 @@ public class PersonGeneratorMain {
 
         for (int i = 0; i < numberToGenerate; i++) {
             log.info("Start {}", i);
-            XlBean person = generate(xlbean);
-            list.add(person);
-            if ((Boolean) FieldAccessHelper.getValue("family.married", person)) {
-                log.info("Start {} spouse", i);
-                XlBean spouse = generateSpouse(xlbean, person);
-                log.info("End {} spouse", i);
-                list.add(spouse);
+            for (XlBean instanceType : xlbean.list("instanceTypes")) {
+                log.info("Start generate {}", i);
+                String instanceTypeName = instanceType.value("name");
+                XlBean target = generateBlankInstance(instanceTypeName);
+                if (evaluateGenerateCondition(target, resultList, instanceType)) {
+                    log.info("Start generate {} {}", i, instanceTypeName);
+                    runGeneratorAndPopulateTarget(target, resultList);
+                    resultList.add(target);
+                    log.info("End generate {} {}", i, instanceTypeName);
+                } else {
+                    log.info("Skipped {} {}", i, instanceTypeName);
+                }
             }
-            if ((Boolean) FieldAccessHelper.getValue("family.hasChild", person)) {
-                log.info("Start {} child", i);
-                XlBean child = generateChild(xlbean, person);
-                log.info("End {} child", i);
-                list.add(child);
-            }
-            log.info("End {}", i);
         }
 
+        log.info("Start output");
+        writeToExcel(resultList, now);
+        writeToJson(resultList, now);
+        log.info("End output");
+    }
+
+    private void writeToExcel(List<XlBean> resultList, String executedTimestamp) {
         XlBean output = new XlBean();
-        output.set("persons", list);
+        output.set("persons", resultList);
         XlBeanWriter writer = new XlBeanWriter(new BeanDefinitionLoader(2));
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-        String outFileName = String.format("result_%s.xlsx", formatter.format(LocalDateTime.now()));
-        try (OutputStream outFile = new FileOutputStream(outFileName)) {
+        String outExcelFileName = String.format("result_%s.xlsx", executedTimestamp);
+        try (OutputStream outFile = new FileOutputStream(outExcelFileName)) {
             writer.write(output, null, output, outFile);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+        log.info("Result saved to excel file: {}", outExcelFileName);
+    }
+
+    private void writeToJson(List<XlBean> resultList, String executedTimestamp) {
+        String outJsonFileName = String.format("result_%s.json", executedTimestamp);
         ObjectMapper mapper = new ObjectMapper();
-        try {
-            log.info(mapper.writeValueAsString(list));
-        } catch (JsonProcessingException e) {
+        try (Writer writer = new OutputStreamWriter(new FileOutputStream(outJsonFileName), "UTF-8");) {
+            mapper.writeValue(writer, resultList);
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        log.info("Result written out to {}", outFileName);
+        log.info("Result in JSON format saved to {}", outJsonFileName);
     }
 
     private void init() {
@@ -95,66 +106,56 @@ public class PersonGeneratorMain {
         CompilerConfiguration config = new CompilerConfiguration();
         config.setScriptBaseClass("io.github.aji3.persongenerator.GeneratorDsl");
         shell = new GroovyShell(config);
+
+        log.info("Start loading excel {}", excelFileName);
+        xlbean = new XlBeanReader().read(new File(excelFileName));
+        log.info("End loading excel {}", excelFileName);
     }
 
-    private XlBean generateSpouse(XlBean xlbean, XlBean me) {
-        XlBean spouse = generateInternal(xlbean, me, LogicType.spouseLogic);
-        FieldAccessHelper.setValue("family.spouse", me.value("id"), spouse);
-        FieldAccessHelper.setValue("family.spouse", spouse.value("id"), me);
-        return spouse;
+    private XlBean generateBlankInstance(String instanceTypeName) {
+        XlBean newInstance = XlBeanFactory.getInstance().createBean();
+        newInstance.put("instanceType", instanceTypeName);
+        return newInstance;
     }
 
-    private XlBean generateChild(XlBean xlbean, XlBean me) {
-        XlBean child = generateInternal(xlbean, me, LogicType.childLogic);
-        if ("F".equals(me.value("sex"))) {
-            FieldAccessHelper.setValue("family.mother", me.value("id"), child);
-            String father = FieldAccessHelper.getValue("family.spouse", me);
-            FieldAccessHelper.setValue("family.father", father, child);
-        } else {
-            FieldAccessHelper.setValue("family.father", me.value("id"), child);
-            String mother = FieldAccessHelper.getValue("family.spouse", me);
-            FieldAccessHelper.setValue("family.mother", mother, child);
-        }
-        FieldAccessHelper.setValue("family.children[0]", child.value("id"), me);
-        return child;
+    private boolean evaluateGenerateCondition(XlBean target, List<XlBean> generatedObjects, XlBean instanceType) {
+        setupScriptContext(target, generatedObjects);
+        String conditionLogic = instanceType.value("condition");
+        return (Boolean) shell.evaluate(conditionLogic);
+    }
+
+    private void runGeneratorAndPopulateTarget(XlBean target, List<XlBean> additionalBeans) {
+        setupScriptContext(target, additionalBeans);
+
+        xlbean.list("generators").forEach(generator -> executeGenerator(generator, target));
 
     }
 
-    private XlBean generate(XlBean xlbean) {
-        return generateInternal(xlbean, null, LogicType.logic);
-    }
-
-    private XlBean generateInternal(XlBean xlbean, XlBean me, LogicType logicType) {
-        final XlBean targetObject = XlBeanFactory.getInstance().createBean();
-
+    private void setupScriptContext(XlBean targetObject, List<XlBean> additionalBeans) {
         xlbean.forEach((key, value) -> shell.setProperty(key, value));
         shell.setProperty("xlbean", xlbean);
         shell.setProperty("_this", targetObject);
-        shell.setProperty("_me", me);
-
-        xlbean.list("generators").forEach(bean -> executeGenerator(bean, targetObject, logicType));
-
-        return targetObject;
+        additionalBeans.forEach(bean -> {
+            shell.setProperty(String.format("_%s", bean.value("instanceType")), bean);
+        });
     }
 
-    private enum LogicType {
-        logic, spouseLogic, childLogic
-    };
+    private void executeGenerator(XlBean generator, XlBean target) {
+        String instanceType = target.value("instanceType");
+        String targetField = generator.value("target");
+        XlBean logicInstance = generator.bean("logic");
+        String generatorLogic = logicInstance.value(instanceType);
+        log.trace("{}\t{}", targetField, generatorLogic);
 
-    private void executeGenerator(XlBean bean, XlBean target, LogicType logicType) {
-        log.trace(bean.value("target") + "\t" + bean.value("logic"));
-
-        String logicTypeStr = logicType.toString();
-
-        if (bean.value(logicTypeStr) == null) {
+        if (generatorLogic == null) {
             return;
         }
 
-        Object result = shell.evaluate(bean.value(logicTypeStr));
+        Object result = shell.evaluate(generatorLogic);
         log.trace("RESULT: " + result);
-        if (bean.value("target") != null) {
-            log.trace("SET: {} <- {}", bean.value("target"), result);
-            FieldAccessHelper.setValue(bean.value("target"), result, target);
+        if (generator.value("target") != null) {
+            log.trace("SET: {} <- {}", generator.value("target"), result);
+            FieldAccessHelper.setValue(generator.value("target"), result, target);
         }
 
     }
