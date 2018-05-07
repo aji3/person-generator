@@ -10,11 +10,11 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xlbean.XlBean;
-import org.xlbean.definition.BeanDefinitionLoader;
 import org.xlbean.reader.XlBeanReader;
 import org.xlbean.util.XlBeanFactory;
 import org.xlbean.writer.XlBeanWriter;
@@ -78,7 +78,16 @@ public class PersonGeneratorMain {
     private void writeToExcel(List<XlBean> resultList, String executedTimestamp) {
         XlBean output = new XlBean();
         output.set("persons", resultList);
-        XlBeanWriter writer = new XlBeanWriter(new BeanDefinitionLoader(2));
+        XlBeanWriter writer = new XlBeanWriter(
+            new ExtendedBeanDefinitionLoader(
+                2,
+                xlbean
+                    .list("generators")
+                    .stream()
+                    .map(elem -> elem.bean("target").value("field"))
+                    .collect(
+                        Collectors.toList()),
+                "persons"));
         String outExcelFileName = String.format("result_%s.xlsx", executedTimestamp);
         try (OutputStream outFile = new FileOutputStream(outExcelFileName)) {
             writer.write(output, null, output, outFile);
