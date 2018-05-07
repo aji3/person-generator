@@ -9,7 +9,10 @@ import java.io.Writer;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.codehaus.groovy.control.CompilerConfiguration;
 import org.slf4j.Logger;
@@ -24,6 +27,7 @@ import org.xlbean.writer.XlBeanWriter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import groovy.lang.GroovyShell;
+import groovy.lang.Script;
 
 public class PersonGeneratorMain {
 
@@ -53,27 +57,45 @@ public class PersonGeneratorMain {
         }
         log.info("Start generating {} data.", numberToGenerate);
 
+        String targetType = xlbean.value("targetType");
+
         for (int i = 0; i < numberToGenerate; i++) {
             log.info("Start {}", i);
-            for (XlBean instanceType : xlbean.list("instanceTypes")) {
-                log.info("Start generate {}", i);
-                String instanceTypeName = instanceType.value("name");
-                XlBean target = generateBlankInstance(instanceTypeName);
-                if (evaluateGenerateCondition(target, resultList, instanceType)) {
-                    log.info("Start generate {} {}", i, instanceTypeName);
-                    runGeneratorAndPopulateTarget(target, resultList);
-                    resultList.add(target);
-                    log.info("End generate {} {}", i, instanceTypeName);
-                } else {
-                    log.info("Skipped {} {}", i, instanceTypeName);
-                }
-            }
+
+            resultList.addAll(generate(targetType));
+
+            log.info("End {}", i);
         }
 
         log.info("Start output");
+
         writeToExcel(resultList, now);
         writeToJson(resultList, now);
         log.info("End output");
+    }
+
+    private List<XlBean> generate(String targetType) {
+        List<XlBean> resultList = new ArrayList<>();
+        for (XlBean instanceType : xlbean.list("instanceTypes")) {
+            XlBean target = generateBlankInstance(targetType, instanceType);
+            if (evaluateGenerateCondition(resultList, instanceType)) {
+                log.info("Start generate {} {}", targetType, instanceType.value("name"));
+                runGeneratorAndPopulateTarget(getGenerators(targetType), target, resultList);
+                resultList.add(target);
+                log.info("End generate {} {}", targetType, instanceType.value("name"));
+            } else {
+                log.info("Skipped {} {}", targetType, instanceType.value("name"));
+            }
+        }
+        return resultList;
+    }
+
+    private List<XlBean> getGenerators(String type) {
+        return xlbean
+            .list("generators")
+            .stream()
+            .filter(item -> "PERSON".equals(item.bean("target").value("type")))
+            .collect(Collectors.toList());
     }
 
     private void writeToExcel(List<XlBean> resultList, String executedTimestamp) {
@@ -112,22 +134,23 @@ public class PersonGeneratorMain {
         log.info("End loading excel {}", excelFileName);
     }
 
-    private XlBean generateBlankInstance(String instanceTypeName) {
+    private XlBean generateBlankInstance(String type, XlBean instanceType) {
         XlBean newInstance = XlBeanFactory.getInstance().createBean();
-        newInstance.put("instanceType", instanceTypeName);
+        newInstance.put("_instanceType", type);
+        newInstance.put("_instanceName", instanceType.value("name"));
         return newInstance;
     }
 
-    private boolean evaluateGenerateCondition(XlBean target, List<XlBean> generatedObjects, XlBean instanceType) {
-        setupScriptContext(target, generatedObjects);
+    private boolean evaluateGenerateCondition(List<XlBean> generatedObjects, XlBean instanceType) {
+        setupScriptContext(null, generatedObjects);
         String conditionLogic = instanceType.value("condition");
         return (Boolean) shell.evaluate(conditionLogic);
     }
 
-    private void runGeneratorAndPopulateTarget(XlBean target, List<XlBean> additionalBeans) {
+    private void runGeneratorAndPopulateTarget(List<XlBean> generators, XlBean target, List<XlBean> additionalBeans) {
         setupScriptContext(target, additionalBeans);
 
-        xlbean.list("generators").forEach(generator -> executeGenerator(generator, target));
+        generators.forEach(generator -> executeGenerator(generator, target));
 
     }
 
@@ -136,26 +159,37 @@ public class PersonGeneratorMain {
         shell.setProperty("xlbean", xlbean);
         shell.setProperty("_this", targetObject);
         additionalBeans.forEach(bean -> {
-            shell.setProperty(String.format("_%s", bean.value("instanceType")), bean);
+            shell.setProperty(String.format("_%s", bean.value("_instanceName")), bean);
         });
     }
 
+    private Map<String, Script> scriptMap = new HashMap<>();
+
+    private Script getScript(String logic) {
+        Script ret = scriptMap.get(logic);
+        if (ret == null) {
+            ret = shell.parse(logic);
+            scriptMap.put(logic, ret);
+        }
+        return ret;
+    }
+
     private void executeGenerator(XlBean generator, XlBean target) {
-        String instanceType = target.value("instanceType");
-        String targetField = generator.value("target");
+        String instanceName = target.value("_instanceName");
+        String targetField = generator.bean("target").value("field");
         XlBean logicInstance = generator.bean("logic");
-        String generatorLogic = logicInstance.value(instanceType);
+        String generatorLogic = logicInstance.value(instanceName);
         log.trace("{}\t{}", targetField, generatorLogic);
 
         if (generatorLogic == null) {
             return;
         }
 
-        Object result = shell.evaluate(generatorLogic);
+        Object result = getScript(generatorLogic).run();
         log.trace("RESULT: " + result);
-        if (generator.value("target") != null) {
-            log.trace("SET: {} <- {}", generator.value("target"), result);
-            FieldAccessHelper.setValue(generator.value("target"), result, target);
+        if (targetField != null) {
+            log.trace("SET: {} <- {}", targetField, result);
+            FieldAccessHelper.setValue(targetField, result, target);
         }
 
     }
