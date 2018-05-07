@@ -9,25 +9,17 @@ import java.io.Writer;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
-import org.codehaus.groovy.control.CompilerConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xlbean.XlBean;
 import org.xlbean.definition.BeanDefinitionLoader;
 import org.xlbean.reader.XlBeanReader;
-import org.xlbean.util.FieldAccessHelper;
 import org.xlbean.util.XlBeanFactory;
 import org.xlbean.writer.XlBeanWriter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import groovy.lang.GroovyShell;
-import groovy.lang.Script;
 
 public class PersonGeneratorMain {
 
@@ -38,14 +30,23 @@ public class PersonGeneratorMain {
     }
 
     private String excelFileName = "person_generator.xlsx";
-    private GroovyShell shell;
     private XlBean xlbean;
+
+    private void init() {
+        XlBeanFactory.setInstance(new FlexibleXlBeanFactory());
+
+        log.info("Start loading excel {}", excelFileName);
+        xlbean = new XlBeanReader().read(new File(excelFileName));
+        log.info("End loading excel {}", excelFileName);
+    }
 
     public void run() {
 
         String now = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(LocalDateTime.now());
 
         init();
+
+        PersonGenerator generator = new PersonGenerator(xlbean);
 
         List<XlBean> resultList = new ArrayList<>();
 
@@ -62,7 +63,7 @@ public class PersonGeneratorMain {
         for (int i = 0; i < numberToGenerate; i++) {
             log.info("Start {}", i);
 
-            resultList.addAll(generate(targetType));
+            resultList.addAll(generator.generate(targetType));
 
             log.info("End {}", i);
         }
@@ -72,30 +73,6 @@ public class PersonGeneratorMain {
         writeToExcel(resultList, now);
         writeToJson(resultList, now);
         log.info("End output");
-    }
-
-    private List<XlBean> generate(String targetType) {
-        List<XlBean> resultList = new ArrayList<>();
-        for (XlBean instanceType : xlbean.list("instanceTypes")) {
-            XlBean target = generateBlankInstance(targetType, instanceType);
-            if (evaluateGenerateCondition(resultList, instanceType)) {
-                log.info("Start generate {} {}", targetType, instanceType.value("name"));
-                runGeneratorAndPopulateTarget(getGenerators(targetType), target, resultList);
-                resultList.add(target);
-                log.info("End generate {} {}", targetType, instanceType.value("name"));
-            } else {
-                log.info("Skipped {} {}", targetType, instanceType.value("name"));
-            }
-        }
-        return resultList;
-    }
-
-    private List<XlBean> getGenerators(String type) {
-        return xlbean
-            .list("generators")
-            .stream()
-            .filter(item -> "PERSON".equals(item.bean("target").value("type")))
-            .collect(Collectors.toList());
     }
 
     private void writeToExcel(List<XlBean> resultList, String executedTimestamp) {
@@ -120,78 +97,6 @@ public class PersonGeneratorMain {
             throw new RuntimeException(e);
         }
         log.info("Result in JSON format saved to {}", outJsonFileName);
-    }
-
-    private void init() {
-        XlBeanFactory.setInstance(new FlexibleXlBeanFactory());
-
-        CompilerConfiguration config = new CompilerConfiguration();
-        config.setScriptBaseClass("io.github.aji3.persongenerator.GeneratorDsl");
-        shell = new GroovyShell(config);
-
-        log.info("Start loading excel {}", excelFileName);
-        xlbean = new XlBeanReader().read(new File(excelFileName));
-        log.info("End loading excel {}", excelFileName);
-    }
-
-    private XlBean generateBlankInstance(String type, XlBean instanceType) {
-        XlBean newInstance = XlBeanFactory.getInstance().createBean();
-        newInstance.put("_instanceType", type);
-        newInstance.put("_instanceName", instanceType.value("name"));
-        return newInstance;
-    }
-
-    private boolean evaluateGenerateCondition(List<XlBean> generatedObjects, XlBean instanceType) {
-        setupScriptContext(null, generatedObjects);
-        String conditionLogic = instanceType.value("condition");
-        return (Boolean) shell.evaluate(conditionLogic);
-    }
-
-    private void runGeneratorAndPopulateTarget(List<XlBean> generators, XlBean target, List<XlBean> additionalBeans) {
-        setupScriptContext(target, additionalBeans);
-
-        generators.forEach(generator -> executeGenerator(generator, target));
-
-    }
-
-    private void setupScriptContext(XlBean targetObject, List<XlBean> additionalBeans) {
-        xlbean.forEach((key, value) -> shell.setProperty(key, value));
-        shell.setProperty("xlbean", xlbean);
-        shell.setProperty("_this", targetObject);
-        additionalBeans.forEach(bean -> {
-            shell.setProperty(String.format("_%s", bean.value("_instanceName")), bean);
-        });
-    }
-
-    private Map<String, Script> scriptMap = new HashMap<>();
-
-    private Script getScript(String logic) {
-        Script ret = scriptMap.get(logic);
-        if (ret == null) {
-            ret = shell.parse(logic);
-            scriptMap.put(logic, ret);
-        }
-        return ret;
-    }
-
-    private void executeGenerator(XlBean generator, XlBean target) {
-        String instanceName = target.value("_instanceName");
-        String targetField = generator.bean("target").value("field");
-        XlBean logicInstance = generator.bean("logic");
-        String generatorLogic = logicInstance.value(instanceName);
-        log.trace("{}\t{}", targetField, generatorLogic);
-
-        if (generatorLogic == null) {
-            return;
-        }
-
-        Object result = getScript(generatorLogic).run();
-        log.trace("RESULT: " + result);
-        if (targetField != null) {
-            log.trace("SET: {} <- {}", targetField, result);
-            FieldAccessHelper.setValue(targetField, result, target);
-        }
-
     }
 
 }

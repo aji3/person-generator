@@ -18,6 +18,26 @@ import groovy.lang.Script;
 
 public abstract class GeneratorDsl extends Script {
 
+    private PersonGenerator generator;
+
+    public List<XlBean> generate(String targetType) {
+        if (generator == null) {
+            generator = new PersonGenerator((XlBean) getProperty("xlbean"));
+        }
+        return generator.generate(targetType);
+    }
+
+    public XlBean generateGet(String targetType, String instanceName) {
+        List<XlBean> generatedList = generate(targetType);
+        XlBean ret = generatedList
+            .stream()
+            .filter(elem -> instanceName.equals(elem.value("_instanceName")))
+            .findFirst()
+            .orElse(null);
+        return ret;
+
+    }
+
     public String generateUUID() {
         return UUID.randomUUID().toString();
     }
